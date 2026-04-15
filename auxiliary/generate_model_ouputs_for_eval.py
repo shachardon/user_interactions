@@ -31,10 +31,10 @@ def parse_args():
 
     # Generation
     p.add_argument("--max_input_tokens", type=int, default=2048)
-    p.add_argument("--max_new_tokens", type=int, default=128)
+    p.add_argument("--max_new_tokens", type=int, default=None)
     p.add_argument("--batch_size", type=int, default=4)
-    p.add_argument("--temperature", type=float, default=0.0)
-    p.add_argument("--top_p", type=float, default=1.0)
+    p.add_argument("--temperature", type=float, default=None)
+    p.add_argument("--top_p", type=float, default=None)
 
     # Output
     p.add_argument("--out_dir", type=str, default="model_outputs")
@@ -179,16 +179,18 @@ def generate_for_dataset(
             add_special_tokens=False,
         ).to(accelerator.device)
 
-        do_sample = temperature > 0.0
         gen_kwargs = dict(
-            max_new_tokens=max_new_tokens,
-            do_sample=do_sample,
             pad_token_id=tok.pad_token_id,
             eos_token_id=tok.eos_token_id,
         )
-        if do_sample:
-            gen_kwargs["temperature"] = temperature
-            gen_kwargs["top_p"] = top_p
+        if max_new_tokens is not None:
+            gen_kwargs["max_new_tokens"] = max_new_tokens
+        if temperature is not None:
+            gen_kwargs["do_sample"] = temperature > 0.0
+            if temperature > 0.0:
+                gen_kwargs["temperature"] = temperature
+                if top_p is not None:
+                    gen_kwargs["top_p"] = top_p
 
         gen = model.generate(**enc, **gen_kwargs)
 
@@ -263,6 +265,8 @@ def main():
                 json.dumps(
                     {
                         "global_idx": glb,
+                        "dataset": ex.get("dataset", ""),
+                        "instruction": ex["raw_prompt"],
                         "raw_prompt": ex["raw_prompt"],
                         "output": outputs[glb],
                     },
@@ -284,26 +288,36 @@ def main():
 
         rows.sort(key=lambda r: r["global_idx"])
 
-        report = {
-            "meta": {
-                "run_name": args.run_name,
-                "timestamp": now_ts(),
-                "dataset": "tatsu-lab/alpaca_eval",
-                "eval_n_requested": args.eval_n,
-                "eval_n_actual": len(rows),
-                "seed": args.seed,
-                "max_prompt_tokens_filter": args.max_prompt_tokens_filter,
-                "model": args.model_name_or_path,
-                "gen": {
-                    "max_input_tokens": args.max_input_tokens,
-                    "max_new_tokens": args.max_new_tokens,
-                    "batch_size": args.batch_size,
-                    "temperature": args.temperature,
-                    "top_p": args.top_p,
-                },
+        examples = [
+            {
+                "dataset": r["dataset"],
+                "instruction": r["instruction"],
+                "raw_prompt": r["raw_prompt"],
+                "output": r["output"],
+                "generator": args.run_name,
+            }
+            for r in rows
+        ]
+
+        meta = {
+            "run_name": args.run_name,
+            "timestamp": now_ts(),
+            "dataset": "tatsu-lab/alpaca_eval",
+            "t": args.eval_n,
+            "eval_n_actual": len(rows),
+            "seed": args.seed,
+            "max_prompt_tokens_filter": args.max_prompt_tokens_filter,
+            "model": args.model_name_or_path,
+            "gen": {
+                "max_input_tokens": args.max_input_tokens,
+                "max_new_tokens": args.max_new_tokens,
+                "batch_size": args.batch_size,
+                "temperature": args.temperature,
+                "top_p": args.top_p,
             },
-            "examples": rows,
         }
+
+        report = [{"meta": meta}] + examples
 
         with open(out_path, "w") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
@@ -321,4 +335,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
